@@ -7,7 +7,7 @@ fs            = require 'fs'
 vm            = require 'vm'
 path          = require 'path'
 child_process = require 'child_process'
-{Lexer}       = require './lexer'
+#{Lexer}       = require './lexer'
 {parser}      = require './parser'
 helpers       = require './helpers'
 SourceMap     = require './sourcemap'
@@ -45,7 +45,7 @@ exports.compile = compile = withPrettyErrors (code, options) ->
   if options.sourceMap
     map = new SourceMap
 
-  fragments = parser.parse(lexer.tokenize code, options).compileToFragments options
+  fragments = parser.parse(code, options).compileToFragments options
 
   currentLine = 0
   currentLine += 1 if options.header
@@ -82,17 +82,17 @@ exports.compile = compile = withPrettyErrors (code, options) ->
   else
     js
 
-# Tokenize a string of CoffeeScript code, and return the array of tokens.
-exports.tokens = withPrettyErrors (code, options) ->
-  lexer.tokenize code, options
+## Tokenize a string of CoffeeScript code, and return the array of tokens.
+#exports.tokens = withPrettyErrors (code, options) ->
+#  lexer.tokenize code, options
 
 # Parse a string of CoffeeScript code or an array of lexed tokens, and
 # return the AST. You can then compile it by calling `.compile()` on the root,
 # or traverse it by using `.traverseChildren()` with a callback.
 exports.nodes = withPrettyErrors (source, options) ->
-  if typeof source is 'string'
-    parser.parse lexer.tokenize source, options
-  else
+#  if typeof source is 'string'
+#    parser.parse lexer.tokenize source, options
+#  else
     parser.parse source
 
 # Compile and execute a string of CoffeeScript (on the server), correctly
@@ -214,25 +214,25 @@ if child_process
     fork path, args, options
 
 # Instantiate a Lexer for our use here.
-lexer = new Lexer
+#lexer = new Lexer
 
 # The real Lexer produces a generic stream of tokens. This object provides a
 # thin wrapper around it, compatible with the Jison API. We can then pass it
 # directly as a "Jison lexer".
-parser.lexer =
-  lex: ->
-    token = @tokens[@pos++]
-    if token
-      [tag, @yytext, @yylloc] = token
-      @yylineno = @yylloc.first_line
-    else
-      tag = ''
-
-    tag
-  setInput: (@tokens) ->
-    @pos = 0
-  upcomingInput: ->
-    ""
+#parser.lexer =
+#  lex: ->
+#    token = @tokens[@pos++]
+#    if token
+#      [tag, @yytext, @yylloc] = token
+#      @yylineno = @yylloc.first_line
+#    else
+#      tag = ''
+#
+#    tag
+#  setInput: (@tokens) ->
+#    @pos = 0
+#  upcomingInput: ->
+#    ""
 # Make all the AST nodes visible to the parser.
 parser.yy = require './nodes'
 
@@ -244,7 +244,7 @@ parser.yy.parseError = (message, {token}) ->
   # data for this token. Unfortunately, Jison seems to send an outdated `loc`
   # (from the previous token), so we take the location information directly
   # from the lexer.
-  helpers.throwSyntaxError message, parser.lexer.yylloc
+  helpers.throwSyntaxError message #, parser.lexer.yylloc
 
 # Based on http://v8.googlecode.com/svn/branches/bleeding_edge/src/messages.js
 # Modified to handle sourceMap

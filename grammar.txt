@@ -1,0 +1,76 @@
+Body: Line  | Body TERMINATOR Line  |  Body TERMINATOR
+Block: INDENT OUTDENT  |  INDENT Body OUTDENT
+Line:   Expression  Statement
+Statement:  Return  | Comment  |  Break  |  Continue
+
+Expression
+  Value |  Operation | Invocation | Assign
+  If | While | For
+  Code  
+  Try | Switch | Class | Throw
+
+Value: Assignable | Literal | Parenthetical | Range | This
+Assignable:  SimpleAssignable | Array | Object
+SimpleAssignable: Value Accessor | Invocation Accessor | ThisProperty | Identifier
+Assign:  
+  Assignable = Expression
+  Assignable = TERMINATOR Expression
+  Assignable = INDENT Expression OUTDENT
+AssignObj: 
+  ObjAssignable
+  ObjAssignable : Expression
+  ObjAssignable : INDENT Expression OUTDENT
+  Comment
+ObjAssignable:   Identifier  |  AlphaNumeric   |  ThisProperty
+AssignList:  
+  ''  | AssignObj  |  AssignList , AssignObj  
+  AssignList OptComma TERMINATOR AssignObj
+  AssignList OptComma INDENT AssignList OptComma OUTDENT'
+Code: PARAM_START ParamList PARAM_END FuncGlyph Block
+      FuncGlyph Block
+FuncGlyph:  ->   |   =>
+Splat:  Expression ...
+Index:  INDEX_START IndexValue INDEX_END   |  INDEX_SOAK  Index
+IndexValue:  Expression | Slice
+Object: { AssignList OptComma }
+Invocation: 
+    Value OptFuncExist Arguments
+    Invocation OptFuncExist Arguments
+    SUPER
+    SUPER Arguments
+For: 
+  Statement  ForBody 
+  Expression ForBody 
+  ForBody    Block
+ForBody:  
+  FOR Range 
+  ForStart ForSource
+
+IfBlock:  
+  IF Expression Block
+  IfBlock ELSE IF Expression Block
+If: 
+  IfBlock
+  IfBlock ELSE Block
+  Statement  POST_IF Expression
+  Expression POST_IF Expression
+Operation: 
+   UNARY Expression
+   -     Expression
+   +     Expression
+   -- SimpleAssignable
+   ++ SimpleAssignable
+   SimpleAssignable --
+   SimpleAssignable ++
+   Expression ?
+   Expression +  Expression
+   Expression -  Expression
+   Expression MATH     Expression
+   Expression SHIFT    Expression
+   Expression COMPARE  Expression
+   Expression LOGIC    Expression
+   Expression RELATION Expression 
+   SimpleAssignable COMPOUND_ASSIGN Expressio
+   SimpleAssignable COMPOUND_ASSIGN INDENT Expression OUTDENT
+   SimpleAssignable COMPOUND_ASSIGN TERMINATOR Expression
+   SimpleAssignable EXTENDS Expression

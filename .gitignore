@@ -9,3 +9,7 @@ examples/beautiful_code/parse.coffee
 *.gem
 /node_modules
 /.idea
+
+/src/*.map
+
+/src/test/*.map
