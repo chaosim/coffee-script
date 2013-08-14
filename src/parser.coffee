@@ -30,6 +30,16 @@ text = '' # the text which is being parsed, this could be any sequence, not only
 textLength = 0 # the length of text
 cursor = 0  # the current position of parsing, use text[cursor] to get current character in parsed stream
 tabWidth = 4 # the tab width, when meet a tab, column += tabWidth
+
+# the current currentIndentWidth, initial value is 0
+# when indenting, it increases and recorded and used as parameter of OUTDENT, to verify outdent
+currentIndentWidth = 0
+# minimal value for one indent
+minIndentWidth = 2
+# when blockMode is true, parse indent block, otherwise parse a single line block
+blockMode = true
+atBeginOfLine = true
+
 parseCache = {} # {tag+start: [result, cursor]}, memorized parser result
 symbolToTagMap = {}  # {symbol: tag}, from rule symbol map to a shorter memo tag, for memory efficeny
 tags = {}  # {tag: true}, record tags that has been used to avoid conflict
@@ -47,7 +57,7 @@ exports.parse = (data, root, options) ->
   parseCache = {}
   baseRules = {}
   symbolToParentsMap = {}
-  memoNames = ['Expression', 'Body', 'Line', 'Block', 'Invocation', 'Value', 'Assignable',
+  memoNames = ['Expression', 'Body', 'Cup', 'Block', 'Invocation', 'Value', 'Assignable',
                'SimpleAssignable', 'For', 'If', 'Operation']
   for symbol in memoNames then setMemoTag(symbol)
   addLeftRecursiveParentChildrens(
@@ -62,7 +72,7 @@ exports.parse = (data, root, options) ->
      Operation: ['Expression', 'SimpleAssignable']
   )
   setRecursiveRules(grammar)
-  setMemorizeRules(grammar, ['Body', 'Line', 'Block', 'Statement'])
+  setMemorizeRules(grammar, ['Body', 'Cup', 'Block', 'Statement'])
   generateLinenoColumn()
   grammar.Root(0)
 
@@ -86,6 +96,7 @@ generateLinenoColumn = () ->
     else
       lineColumnList[i++] = [lineno, column]
       column++
+  lineColumnList[i] = [lineno+1, 0]
 
 # some utilities used by the parser
 # on succeed any matcher should not return a value which is not null or undefined, except the root symbol.
@@ -104,14 +115,14 @@ setMemoTag = (symbol) ->
 setMemorizeRules = (grammar, symbols) ->
   for symbol in symbols
     baseRules[symbol] = grammar[symbol]
-    rules[symbol] = memorize(symbol)
+    grammar[symbol] = memorize(symbol)
 
 # set all the symbols in grammar which  are left recursive.
 setRecursiveRules = (grammar) ->
   map = symbolToParentsMap
   for symbol of map
     baseRules[symbol] = grammar[symbol]
-    rules[symbol] = recursive(symbol)
+    grammar[symbol] = recursive(symbol)
 
 # add direct left recursive parent->children relation for @parentChildrens to global variable symbolToParentsMap
 addLeftRecursiveParentChildrens = (parentChildrens...) ->
@@ -175,11 +186,11 @@ recursive = (symbol) ->
 
 # memorize result and cursor for @symbol which is not left recursive.
 # left recursive should be wrapped by recursive(symbol)!!!
-memorize = memorize = (symbol) ->
+exports.memorize = memorize = (symbol) ->
   tag = symbolToTagMap[symbol]
   rule = baseRules[symbol]
-  hash = tag+start
   (start) ->
+    hash = tag+start
     m = parseCache[hash]
     if m then cursor = m[1]; m[0]
     else
@@ -208,9 +219,9 @@ andp = (exps...) -> (start) ->
 # the effect is the same as by using the Short-circuit evaluation, like below:
 # exps[0](start) or exps[2](cursor] ... or exps[exps.length-1](cursor)
 orp = (exps...) -> (start) ->
-for exp in exps
-  if result = exp(start) then return result
-  return result
+  for exp in exps
+    if result = exp(start) then return result
+    return result
 
 # applicaton of not operation
 # notp is not useful  except to compose the matchers.
@@ -221,30 +232,34 @@ notp = (exp) -> (start) -> not exp(start)
 # compute the global variable lineno and column Synchronously
 # It's important and noteworthy that how to keep lineno and column having the correct value at any time.
 # pay attention to that!
+# comment: have record in advance, so the code on lineno is removed.
 next = () ->
-  c = text[cursor++]
-  if c is '\r'
-    if text[cursor] is '\n' then c = text[cursor++]
-    lineno++; column = 0
-  else if c is '\n' then lineno++; column = 0
-  return c
+  return text[cursor++]
+#  c = text[cursor++]
+#  if c is '\r'
+#    if text[cursor] is '\n' then c = text[cursor++]
+#    lineno++; column = 0
+#  else if c is '\n' then lineno++; column = 0
+#  return c
 
 # change both cursor and column
-step = (n=1) -> cursor += n; column += n
+step = (n=1) -> cursor += n; # column += n
 
 # match one character
 char = (c) -> (start) ->
   cursor = start
   setlinecolumen()
-  if next()==c then cursor = start+1; return c
+  if text[cursor++]==c then cursor = start+1; return c
 
 # match a literal string.
 # There should not have newline character("\r\n") in literal string!
 # Otherwise the lineno and column will be updated wrongly.
+# now the relation is not existed any more because the lineno and column is computed in advance.
 literal = (string) -> (start) ->
   n = string.length
   if text.slice(start,  stop = start+n)==string
-    cursor = stop; column += n; true
+    cursor = stop; true
+#    cursor = stop; column += n; true
 
 # zero or more whitespaces, ie. space or tab.
 # tab '\t' is counted as tabWidth spaces, and the columen is updated in this manner.
@@ -259,7 +274,7 @@ spaces = (start) ->
     if c==' ' then n++
     else if c=='\t' then n += tabWidth
     else break
-  column += n
+#  column += n
   return n+1
 
 # one or more whitespaces, ie. space or tab.
@@ -274,7 +289,9 @@ spaces1 = (start) ->
     if c==' ' then n++
     else if c=='\t' then n += tabWidth
     else break
-  if n then return column += n; n
+  if n
+#    column += n;
+    n
 
 # first, match @left, then match @item, at last match @right
 # left and right is set to spaces by default.
@@ -282,84 +299,151 @@ wrap = (item, left=spaces, right=spaces) -> (start) ->
   if left(start) and result = item(cursor) and right(cursor)
     return result
 
+# is a letter used in identifer?
+# follow word such as return, break, etc.
+identifierLetter_ = () ->
+  c = text[cursor]
+  c is '$' or c is '_' or 'a'<=c<'z' or 'A'<=c<='Z' or '0'<=c<='9'
+
 # Grammatical rules of Coffeescript
 
 exports.grammar = grammar = cs = {}
 
 # The **Root** is the top-level node in the syntax tree.
 cs.Root = (start) ->
-  skipHeadSpaces(start)  # skip the spaces at the begin of program, including line comment.
+  skipHeadSpaces_()  # skip the spaces at the begin of program, including line comment.
   if cursor is textLength then new yy.Block
   else
     body = cs.Body(cursor)
     # and skipTailSpaces(cursor); body # is skipTailSpaces necessary? wait to see.
 
 # skip the spaces at the begin of program, including line comment.
-skipHeadSpaces = (start) ->
-  while1: while c = next()
-    switch c
-      when ' ', 't', '\r', '\n' then continue
-      when '#'
-        while c = next()
-          if c and c!='\r' and c!='n' then continue
-          else break
-      else
-        `break while1`;
-        undefined # workarounds of coffeescript's transpilation feature.
-  if column isnt 0 then throw new Error("Effect Code Line should at column 0, the begin of a line.")
-
+skipHeadSpaces_ = () ->
+  while c = text[cursor]
+    if c==' ' or c=='t' or c== '\r' or c== '\n' then cursor++; continue
+    else if c is '#' and not (text[cursor+1] isnt '#'or text[cursor+2] isnt '#') # should stop at BlockComment
+      while c = text[cursor++]
+        if c=='\r' or c=='n' then break
+    else if c is '\\'
+      throw new ParseError(cursor, "should not have ';' or '\' at the begin of program.")
+    else if c is ';'  # maybe should allow ; at begin of line?
+      throw new ParseError(cursor, "should not have ';' or '\' at the begin of program.")
+    else break
+  if lineColumnList[cursor][1] isnt 0
+    throw new ParseError(cursor, "Effective Code Cup of the whole program should start at column 0, the begin of a line.")
 
 # Any list of statements and expressions, separated by line breaks or semicolons.
 cs.Body = (start) ->
-  lines = []
-  x = cs.Line(start)
-  if x then lines.push(x)
+  cups = []
   while 1
-    if cs.TERMINATOR(cursor)
-      if x = cs.Line(cursor) then lines.push x
+    if cs.CupLeftEdge_() and (cup = cs.Cup(cursor)) and cs.CupRightEdge_()
+      cups.push cup
     else break
-  yy.Block.wrap(lines)
+  # if cups do not include effective code, should have  yy.literal('undefined') added.
+  yy.Block.wrap(cups)
+
+cs.CupLeftEdge_ = () ->
+  if blockMode
+    if atBeginOfLine
+      atBeginOfLine = false
+      spaces_() and (lineColumnList[cursor][1]==currentIndentWidth)
+    else spaces_() and (concatenation_() or true) and spaces_()
+  else
+    spaces_() and (concatenation_() or true) and spaces_()
+
+cs.CupRightEdge_ = () ->
+  spaces_() and (semicolon_() or (linecomment_() or newline_()) and atBeginOfLine= true)
+
+# before INDENT, should have skip all of whitespaces, newline, linecomment,  and give blockMode a determined value.
+cs.INDENT = (start) ->
+  if not blockMode then true
+  else if column >= currentIndentWidth+minIndentWidth
+      currentIndentWidth = column
+
+cs.OUTDENT = (indent) -> (start) ->
+  if blockMode then column is indent
+  else column is 0
+
+# skip spaces until meet an end of line, then skip to the begin of next line
+# line comment at the tail of the line is skipped too.
+spacesUntilEndOfLine = (start) ->
+  cursor = start
+  while 1
+    c = text[cursor]
+    if c is '\t' or c is ' ' then cursor++; continue
+    else if c is '#'
+      if text[cursor+1] is '#' and text[cursor+2] is '#'
+        new ParseError(cursor, 'unexpected block comment!') # block comment is a statement!!!
+      cursor++
+      while 1
+        c = text[cursor]
+        if c is '\r' and text[cursor+1] is '\n'
+          cursor +=2; return true
+        else if c is '\n' then cursor++; return true
+        else if c is undefined then return
+        else cursor++
+    else break
+  if c is '\r' and text[cursor+1] is '\n'
+    cursor +=2; true
+  else if c is '\n' then cursor++; true
+
 
 # Block and statements, which make up a line in a body.
-# The comment above is by jashkenas. Should it be Expression?
-cs.Line = (start) ->
-  cs.Statement(cursor)\
-  or cs.Expression(cursor)
+# The comment above is by jashkenas. Should Block be Expression?
+
+# Cup is the equivalence of the original grammar.coffee written by jashkenas
+# I repace Line with Cup because Line is too easily misunderstood.
+# Line in grammar.coffe can be a part of phisical line or a concatenation of multiple physical line,
+# even a single compound statement of multiple physical line.
+# Cup is a intact logic unit of code piece, same as Line in grammar.coffee.
+# The Cup can be big or small, and a Cup can be put in the Body of another bigger Cup.
+# So let's have a cup of coffee.
+cs.Cup = (start) ->
+  cs.Statement(start)\
+  or cs.Expression(start)\
+  or cs.EmptyCup(start)
+
+# A cs.Cup begin with semicolon, or has only spaces, line comment(which obey indent/unindent
+cs.EmptyCup = (start) ->
+  c = text[start]
+  c is ';' or c is '\r' or c is '\n'
 
 # Pure statements which cannot be expressions.
 cs.Statement = (start) ->
    cs.Return(start)\
-   or cs.Comment(start)\
+   or cs.BlockComment(start)\
    or cs.Break(start)\
-   or Continue(start)
+   or cs.Continue(start)
    # Break and Continue is my repacement to STATEMENT in original grammar.coffee
 
 # A return statement from a function body.
 cs.Return = (start) ->
-  if word_return(start) and spacesConcatLine(cursor)
+  if RETURN(start) and spacesConcatLine_()
     if exp = cs.Expression(cursor) then new yy.Return exp
     else new yy.Return
 
-# A block comment.
-cs.Comment = (start) -> cs.HERECOMMENT(start)
-cs.HERECOMMENT = (start) ->
+### ###
+###
+    dfasfdfs
+  dsfdfsa
+asdfdsfa
+   ###
+# A block comment
+# BlockComment should obey the indent/outdent rule, but line comment don't need, right? -->yes.
+# BlockComment will return yy.Comment and generate comment in object javascript code
+cs.BlockComment = (start) ->
   cursor = start
-  c = next()
-  if c=='#'
-    if text.slice(cursor, cursor+2) is '##'
-      column += 2; cursor += 2
+  if text[cursor] is '#'and text[cursor+1] is '#' and text[cursor+2] is '#'
+      cursor += 3
       while 1
-        c = next()
-        if c isnt '#' then continue
-        if text.slice(cursor, cursor+2) is '##' then return true
-  else while 1 then if c is '\n' then return true
+        c = text[cursor]
+        if not c then return
+        if c is '#' and text[cursor+1] is '#' and text[cursor+2] is '#'
+          cursor += 3
+          return new yy.Comment text.slice(start+3, cursor-3)
 
-cs.Break = (start) -> if word_break(start) and spaces(cursor)  then new yy.Literal('break')
-Continue = (start) -> if word_continue(start) and spaces(cursor)  then new yy.Literal('continue')
-
-word_return = literal('return')
-word_break = literal('break')
-word_continue = literal('continue')
+cs.Break = (start) -> if BREAK(start)  then new yy.Literal('break')
+cs.Continue = (start) -> if CONTINUE(start) then new yy.Literal('continue')
 
 # All the different types of expressions in our language. The basic unit of
 # CoffeeScript is the **cs.Expression** -- everything that can be an expression
@@ -380,19 +464,22 @@ cs.Expression = (start) ->
   or cs.Code(start)       #(param) -> ... or -> ..
 
 recValue = memo('Value')
+recOperation = memo('Operation')
 recInvocation = memo('Invocation')
-recoAssign = memo('Assign')
+recAssign = memo('Assign')
 recIf = memo('If')
 recWhile = memo('While')
 recFor = memo('For')
 
 # An indented block of expressions. Note that the [Rewriter](rewriter.html)
-# will convert some postfix forms into blocks for us, by adjusting the
-# token stream.
+# will convert some postfix forms into blocks for us, by adjusting the token stream.
+# as described below, I should consider how to add block of single line which is consisted of mulitple line cup.
 cs.Block = (start) ->
-  if INDENT(start)
-    if OUTDENT(cursor) then new yy.Block
-    else if body = cs.Body(cursor) and  OUTDENT(cursor) then body
+  # two mode: single line block mode, indent block mode
+  if n = INDENT(start)
+    outdent = OUTDENT(n)
+    if outdent(cursor) then new yy.Block
+    else if body = cs.Body(cursor) and  outdent(cursor) then body
 
 # A literal identifier, a variable name or property.
 cs.Identifier = (start) -> cs.IDENTIFIER(start)
@@ -410,24 +497,36 @@ cs.Literal = (start) ->
   or cs.BOOL(start)
 
 recAssignable = memo('Assignable')
-  # Assignment of a variable, property, or index to a value.
+
+# Assignment of a variable, property, or index to a value.
 cs.Assign = (start) ->
-  if left = recAssignable(start) and wrap('=')(cursor)
+  if left = recAssignable(start) and assignOp_(cursor)
     if exp = cs.Expression(cursor)\
+       # it's right to use TERMINATOR here? how about meeting a semicolon?
+       # spaces till newline, or line comment
        or cs.TERMINATOR(cursor) and exp = cs.Expression(cursor)\
-       or INDENT(cursor) and exp = cs.Expression and OUTDENT(cursor)
+       or n = INDENT(cursor) and exp = cs.Expression and (outdent = OUTDENT(n)) and outdent(cursor)
       new yy.Assign left, exp
+
+symbolOperator_ =(op) ->
+  # : + && ||  etc.
+  op = literal_(op)
+  () ->
+  spacesConcatLine_() and op() and spacesConcatLine_()
+
+assignOp_ = symbolOperator_('=')
 
 # Assignment when it happens within an object literal. The difference from
 # the ordinary **cs.Assign** is that these allow numbers and strings as keys.
 cs.AssignObj = (start) ->
-  if x = cs.Comment then return x
+  if x = cs.BlockComment then return x
   if left = cs.ObjAssignable(start)
     if wrap(':')
       if exp = cs.Expression(cursor)\
          or INDENT(cursor) and exp = cs.Expression(cursor) and OUTDENT(cursor)
         new yy.Assign LOC(1)(new yy.Value(left)), exp, 'object'
-    else new yy.Value left
+    else
+      new yy.Value left
 
 cs.ObjAssignable = (start) ->
   cs.Identifier(start)\
@@ -799,6 +898,9 @@ cs.Switch = (start) ->
           else new yy.Switch test, whens
     OUTDENT(cursor)
 
+SWITCH = (start) -> switch_word(start) and not identifierLetter_()
+switch_word = literal('switch')
+
 cs.Whens = (start) ->
   result =[]
   while 1
@@ -862,24 +964,89 @@ cs.Operation = (start) ->
 
 wrapinc = wrap('++'); wrapdec = wrap('--');  wrapadd = wrap('+'); wrapsub = wrap('-');
 
-_spaces = (item) -> (start) -> item(start) and  spaces(cursor)
-spaces_ = (item) -> (start) -> spaces(start) and item(cursor)
-
 cs.newyyValue = (item) -> (start) ->
   if x = item(start) then new yy.Value(x)
+  #fdasf
 
+#  skip whitespaces, line concatentation and any ';'
+# should include line comment
 cs.TERMINATOR = (start) ->
   cursor = start
+  spaces_()
+  if text[cursor]==';'
+    cursor++; meetSemicolon = true
+    spaces_()
+  if lineComment_()
+    skipEmptyLineAndCommentLines_()
+  else if concatLine_() then return meetSemicolon
+  true
+
+spaces_ = () ->
+  while c = text[cursor++]
+    if c!=' ' and c!='\t' then return true
+  return true
+
+
+#  skip whitespaces, line concatentation, but don't skip ';', line comment
+# used in cases that should have left parts of a cs.Cup to be parsed.
+# used after RETURN after cs.Return
+spacesConcatLine_ = () ->
+  concated = false
   while 1
-    c = next
-    if c==' ' or c==';' or c=='\t' then continue
-    else if c=='\\'
-      if text[cursor+1]=='\r' and text[cursor+2]=='\n'
-        cursor += 3; lineno++; column = 0
-      else if text[cursor+1]=='\n' then  cursor += 2; lineno++; column = 0
-      else new ParseError(lineno, column, "meet a line concatenation symbol ('\\') which is not at the end of line.")
+    c = text[cursor]
+    if c==' ' or c=='\t' then continue # c==';' or , different from TERMINATOR here with stopping at ';'
+    # in the middle of line, is it right to eat line comment?
+    if lineComment_() then return # fail and backtrack, maybe other choice which have indent/outdent
+    else if concatLine_() then return true  # concatLine should bring the left part for the cs.Cup
     else break
   true
+
+# line comment, which can begin at any position, is different from block comment
+lineComment_ = () ->
+  if text[cursor] is '#'
+    if text[cursor+1] is '#' and text[cursor+2] is '#'
+      new ParseError(cursor, 'unexpected block comment!') # block comment is a statement!!!
+    cursor++
+  skipToEndOfLine_()
+
+
+# skip lines which is whitespaces completely or with line comment follow some whitespaces
+# until reach a line which inludes effective code.
+skipEmptyLineAndCommentLines_ = () ->
+  while 1
+    spaces_()
+    lineComment_()
+    if not newline_() then break
+  if text[cursor]=='\\'
+    new ParseError(cursor, 'should not begin a line with \\')
+#  else if text[cursor] ==';'
+#    new ParseError(cursor, 'should not begin a line with ;')
+  return true
+
+# skip any character until end of line, include # ; \ etc. used by lineComment_
+skipToEndOfLine_ = () ->
+  while 1
+    c = text[cursor]
+    if c is '\r' and text[cursor+1] is '\n'
+      cursor +=2; return true
+    else if c is '\n' then cursor++; return true
+    else if c is undefined then return true
+    else cursor++
+  return true
+
+# concatenate line by \, skip until first nonwhitespace in next line, check error cases.
+concatLine_ = () ->
+  if text[cursor]=='\\'
+    if text[cursor+1]=='\r' and text[cursor+2]=='\n'
+      cursor += 3; lineno++; #column = 0
+    else if text[cursor+1]=='\n' then  cursor += 2; lineno++; #column = 0
+    else new ParseError(cursor, "meet a line concatenation symbol ('\\') which is not at the end of line.")
+    skipHeadWhiteSpaces_()
+    c = text[cursor]
+    if c is '\\' or c is '#' or c is ';'
+      new ParseError(cursor, "The next line of line concatenation symbol \\ should not begin with #{c}")
+    else if c is '\r' or c is '\n'
+      new ParseError(cursor, "The next line of line concatenation symbol \\ should not be a empty line.")
 
 cs.IDENTIFIER = (start) ->
   if id = identifier(start) then new yy.Literal id
@@ -892,7 +1059,6 @@ cs.DEBUGGER = (start) -> new yy.Literal $1
 cs.UNDEFINED = (start) -> new yy.Undefined
 cs.NULL = (start) -> new yy.Null
 cs.BOOL = (start) -> new yy.Bool $1
-cs.HERECOMMENT = (start) -> new yy.Comment $1
 
 # Precedence
 # Operators at the top of this list have higher precedence than the ones lower down.
@@ -915,3 +1081,14 @@ operators = [
   ['right',     'IF', 'ELSE', 'FOR', 'WHILE', 'UNTIL', 'LOOP', 'SUPER', 'CLASS']
   ['right',     'POST_IF']
 ]
+
+#['__bind', '__extends',  '__hasProp',  '__indexOf',  '__slice',  'break',  'by',  'case',
+# 'catch',  'class',  'const',  'continue',  'debugger',  'default',  'delete',  'do',  'else',
+# 'enum',  'export',  'extends',  'false',  'finally',  'for',  'function',  'if',  'implements',
+# 'import',  'in',  'instanceof',  'interface',  'let',  'loop',  'native',  'new',  'null',  'of',
+# 'package',  'private',  'protected',  'public',  'return',  'static',  'super',  'switch',
+# 'then',  'this',  'throw',  'true',  'try',  'typeof',  'undefined',  'unless',  'until',
+# 'var',  'void',  'when',  'while',  'with',  'yield'] =
+#  for kw in []
+#    do (kw_word  = literal(kw)) ->
+#      (start) -> kw_word(start) and not identifierLetter_()

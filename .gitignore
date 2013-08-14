@@ -13,3 +13,5 @@ examples/beautiful_code/parse.coffee
 /src/*.map
 
 /src/test/*.map
+
+/*.map
